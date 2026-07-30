@@ -1,25 +1,9 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import itertools
-import os
 import re
-from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
 import streamlit as st
-
-# --- VERSION TRACKING ---
-# Dynamically generate the current date and time as the version
-APP_VERSION = datetime.now().strftime("%Y-%m-%d %I:%M %p")
-
-
-# --- DEPENDENCY & BROWSER AUTO-INSTALL HOOK ---
-@st.cache_resource
-def install_dependencies():
-  os.system("pip install playwright-stealth")
-  os.system("playwright install")
-
-
-install_dependencies()
+from playwright.async_api import async_playwright
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Multi-Bet Parlay Scraper", layout="wide")
@@ -140,34 +124,42 @@ def is_today_game(raw_text):
   if "tomorrow" in lower:
     return False
 
-  now = datetime.now()
-  tomorrow = now + timedelta(days=1)
-
-  f_month, f_day = tomorrow.month, tomorrow.day
-  future_patterns = [
-      f"{f_month}/{f_day}",
-      f"{f_month:02d}/{f_day:02d}",
-      tomorrow.strftime("%b %d").lower(),
-      tomorrow.strftime("%B %d").lower(),
+  future_date_patterns = [
+      "7/29",
+      "07/29",
+      "7/30",
+      "07/30",
+      "7/31",
+      "07/31",
+      "jul 29",
+      "jul 30",
+      "jul 31",
+      "july 29",
+      "july 30",
+      "july 31",
+      "aug",
+      "8/",
   ]
-  for f_pattern in future_patterns:
+  for f_pattern in future_date_patterns:
     if f_pattern in lower:
       return False
 
   if "today" in lower:
     return True
 
-  c_month, c_day = now.month, now.day
-  current_patterns = [
-      f"{c_month}/{c_day}",
-      f"{c_month:02d}/{c_day:02d}",
-      now.strftime("%b %d").lower(),
-      now.strftime("%B %d").lower(),
+  current_date_patterns = [
+      "7/28",
+      "07/28",
+      "7-28",
+      "07-28",
+      "jul 28",
+      "july 28",
+      "28 jul",
+      "28 july",
   ]
-  for pattern in current_patterns:
+  for pattern in current_date_patterns:
     if pattern in lower:
       return True
-
   return True
 
 
@@ -237,13 +229,12 @@ def is_pitcher_strikeouts(raw_text):
 
 # --- STREAMLIT UI SIDEBAR CONFIGURATION ---
 st.sidebar.header("⚙️ Configuration")
-st.sidebar.markdown(f"**App Version:** `{APP_VERSION}`")
-st.sidebar.markdown("---")
 
 target_league_input = st.sidebar.selectbox(
     "Target League", list(league_mapping.keys()), index=3, key="cfg_league"
 )
 
+# Dynamically filter market types based on selected sport/league
 league_upper = target_league_input.upper()
 if league_upper == "MLB":
   available_markets = [
@@ -296,7 +287,7 @@ elif league_upper in ["FIFA", "LIGA MX", "MLS", "SERIE A"]:
       "Player Goals",
       "Player Shots On Target",
   ]
-else:
+else:  # ALL or others
   available_markets = [
       "Moneyline",
       "Spread / Run Line / Puck Line",
@@ -308,113 +299,60 @@ else:
       "Player Pitching Strikeouts",
   ]
 
-st.sidebar.subheader("Team Filters")
-col_f1, col_f2 = st.sidebar.columns(2)
-with col_f1:
-  exclude_input = st.text_input("Exclude Teams", "", key="cfg_exclude")
-with col_f2:
-  include_input = st.text_input("Include Teams", "", key="cfg_include")
-
+exclude_input = st.sidebar.text_input(
+    "Global Teams to Exclude (comma-separated)", "", key="cfg_exclude"
+)
 excluded_teams = [
     t.strip().lower() for t in exclude_input.split(",") if t.strip()
 ]
+
+include_input = st.sidebar.text_input(
+    "Global Teams to Strictly Include (comma-separated)", "", key="cfg_include"
+)
 included_teams = [
     t.strip().lower() for t in include_input.split(",") if t.strip()
 ]
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ Parlay Configuration Boxes")
+st.sidebar.subheader("Sportsbook Specifics")
 
-if "parlay_configs" not in st.session_state:
-  st.session_state.parlay_configs = [{
-      "id": 0,
-      "book": "DraftKings",
-      "legs": 1,
-      "min_odds": 0,
-      "max_odds": 0,
-      "boost": 0.0,
-      "market_types": [],
-      "mainlines": False,
-      "requires_under": False,
-  }]
+# Select active books
+selected_books = st.sidebar.multiselect(
+    "Select Sportsbooks to Run",
+    options=list(unique_books_dict.keys()),
+    default=["DraftKings", "FanDuel"],
+)
 
-if st.sidebar.button(
-    "➕ Add Another Parlay Box", key="add_parlay_box_btn", use_container_width=True
-):
-  new_id = (
-      max([c["id"] for c in st.session_state.parlay_configs]) + 1
-      if st.session_state.parlay_configs
-      else 0
-  )
-  st.session_state.parlay_configs.append({
-      "id": new_id,
-      "book": "DraftKings",
-      "legs": 1,
-      "min_odds": 0,
-      "max_odds": 0,
-      "boost": 0.0,
-      "market_types": [],
-      "mainlines": False,
-      "requires_under": False,
-  })
-  st.rerun()
+book_configs = {}
 
-updated_configs = []
-for idx, cfg in enumerate(st.session_state.parlay_configs):
-  box_id = cfg["id"]
-  with st.sidebar.expander(
-      f"Parlay Box #{idx+1} ({cfg['book']})", expanded=True
-  ):
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-      book = st.selectbox(
-          "Sportsbook",
-          options=list(unique_books_dict.keys()),
-          index=list(unique_books_dict.keys()).index(cfg["book"])
-          if cfg["book"] in unique_books_dict
-          else 0,
-          key=f"book_{box_id}",
-      )
-    with col_b2:
-      legs = st.number_input(
-          "Legs",
-          min_value=1,
-          max_value=5,
-          value=cfg["legs"],
-          step=1,
-          key=f"legs_{box_id}",
-      )
-
-    col1, col2 = st.columns(2)
-    with col1:
-      min_odds = st.number_input(
-          "Min Odds", value=cfg["min_odds"], key=f"min_{box_id}"
-      )
-    with col2:
-      max_odds = st.number_input(
-          "Max Odds", value=cfg["max_odds"], key=f"max_{box_id}"
-      )
-
-    boost = st.number_input(
-        "Profit Boost (%)", value=cfg["boost"], key=f"boost_{box_id}"
+# Expanders for unique sportsbook parameters
+for book in selected_books:
+  with st.sidebar.expander(f"⚙️ {book} Settings", expanded=False):
+    legs = st.number_input(
+        f"Legs per Parlay",
+        min_value=1,
+        max_value=5,
+        value=2,
+        step=1,
+        key=f"{book}_legs",
     )
+    min_odds = st.number_input(f"Minimum Odds", value=400, key=f"{book}_min")
+    max_odds = st.number_input(f"Maximum Odds", value=1000, key=f"{book}_max")
+    boost = st.number_input(f"Profit Boost (%)", value=0.0, key=f"{book}_boost")
 
+    # Sport-appropriate market type selector
     market_types = st.multiselect(
-        "Allowed Market Types",
+        f"Allowed Market Types",
         options=available_markets,
-        default=[],
-        key=f"markets_{box_id}",
+        default=[available_markets[0]],
+        key=f"{book}_markets",
+        help=f"Select specific bet markets for {target_league_input}.",
     )
 
-    col3, col4 = st.columns(2)
-    with col3:
-      mainlines = st.checkbox(
-          "Mainlines Only", value=cfg["mainlines"], key=f"main_{box_id}"
-      )
-    with col4:
-      requires_under = st.checkbox(
-          "Requires 'Under'", value=cfg["requires_under"], key=f"under_{box_id}"
-      )
+    mainlines = st.checkbox(f"Mainlines Only", value=True, key=f"{book}_main")
+    requires_under = st.checkbox(
+        f"Requires 'Under'", value=False, key=f"{book}_under"
+    )
 
     has_prop = any("Player" in m for m in market_types)
     if has_prop and mainlines:
@@ -424,26 +362,16 @@ for idx, cfg in enumerate(st.session_state.parlay_configs):
           " the site to find these props."
       )
 
-    remove_clicked = False
-    if len(st.session_state.parlay_configs) > 1:
-      if st.button("🗑️ Remove Box", key=f"remove_{box_id}"):
-        remove_clicked = True
-
-    if not remove_clicked:
-      updated_configs.append({
-          "id": box_id,
-          "book": book,
-          "legs": legs,
-          "min_odds": min_odds,
-          "max_odds": max_odds,
-          "boost": boost,
-          "mainlines": mainlines,
-          "requires_under": requires_under,
-          "market_types": market_types,
-          "has_prop": has_prop,
-      })
-
-st.session_state.parlay_configs = updated_configs
+    book_configs[book] = {
+        "legs": legs,
+        "min_odds": min_odds,
+        "max_odds": max_odds,
+        "boost": boost,
+        "mainlines": mainlines,
+        "requires_under": requires_under,
+        "market_types": market_types,
+        "has_prop": has_prop,
+    }
 
 st.sidebar.markdown("---")
 run_button = st.sidebar.button(
@@ -451,17 +379,16 @@ run_button = st.sidebar.button(
 )
 
 st.title("⚾ Multi-Bet Parlay Scraper")
-st.caption(f"Active Version: `{APP_VERSION}`")
 
 if run_button:
-  if not st.session_state.parlay_configs:
-    st.error("Please configure at least one parlay box.")
+  if not selected_books:
+    st.error("Please select at least one sportsbook to run.")
     st.stop()
 
   saved_sessions = []
 
-  for cfg in st.session_state.parlay_configs:
-    book_name = cfg["book"]
+  for book_name in selected_books:
+    cfg = book_configs[book_name]
     final_mainlines = (
         "n" if cfg["has_prop"] else ("y" if cfg["mainlines"] else "n")
     )
@@ -483,94 +410,59 @@ if run_button:
     })
 
   progress_placeholder = st.empty()
-  progress_placeholder.info(
-      f"Launching Stealth Playwright scraper ({APP_VERSION})... Please wait."
-  )
+  progress_placeholder.info("Launching Playwright scraper... Please wait.")
 
 
+  # --- ASYNC SCRAPER RUNNER ---
   async def run_playwright_scraper():
-    async with Stealth().use_async(async_playwright()) as p:
-      browser = await p.chromium.launch(
-          headless=True,
-          args=[
-              "--disable-blink-features=AutomationControlled",
-              "--no-sandbox",
-              "--disable-setuid-sandbox",
-              "--disable-dev-shm-usage",
-          ],
-      )
+    async with async_playwright() as p:
+      browser = await p.chromium.launch(headless=True)
       context = await browser.new_context(
-          user_agent=(
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-              " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-          ),
-          viewport={"width": 1920, "height": 1080},
+          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       )
 
       scraped_data_per_session = []
       all_scraped_games = {}
-      debug_raw_rows_info = []
 
       for session in saved_sessions:
         page = await context.new_page()
         target_league = session["target_league"]
-        
-        # Fast-fail block for navigation issues with reduced timeout (10 seconds)
-        try:
-          await page.goto(
-              "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
-              timeout=10000, 
-              wait_until="commit",
-          )
-          await asyncio.sleep(2.0)
-        except Exception as nav_err:
-          # Log timeout silently and treat as empty table
-          debug_raw_rows_info.append({
-              "book": session["book_name"],
-              "total_rows": 0,
-              "valid_plays": 0,
-              "sample_rows": [f"Navigation Error / Timeout: {nav_err}"],
-          })
-          scraped_data_per_session.append([])
-          await page.close()
-          continue 
 
-        # Select sportsbook and trigger change event
-        try:
-          sb_dropdown = page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterSportsbookSite_DropDownListSportsbookSite_All"
-          )
-          await sb_dropdown.select_option(session["book_val"])
-          await sb_dropdown.evaluate(
-              "element => element.dispatchEvent(new Event('change', { bubbles:"
-              " true }))"
-          )
+        await page.goto("https://crazyninjaodds.com/site/tools/positive-ev.aspx")
 
-          # Select league and trigger change event
-          league_val = league_mapping.get(target_league.upper(), "0")
-          league_locator = page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterLeague_DropDownListLeague"
-          )
-          await league_locator.select_option(league_val)
-          await league_locator.evaluate(
-              "element => element.dispatchEvent(new Event('change', { bubbles:"
-              " true }))"
-          )
+        # Set Sportsbook
+        await page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterSportsbookSite_DropDownListSportsbookSite_All"
+        ).select_option(session["book_val"])
 
-          mainline_checkbox = page.get_by_role("checkbox", name="Mainlines Only")
-          if session["mainlines"] == "y":
-            if not await mainline_checkbox.is_checked():
-              await mainline_checkbox.check()
-          else:
-            if await mainline_checkbox.is_checked():
-              await mainline_checkbox.uncheck()
+        # Set League
+        league_val = league_mapping.get(target_league.upper(), "0")
+        league_locator = page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterLeague_DropDownListLeague"
+        )
+        await league_locator.select_option(league_val)
+        await league_locator.evaluate(
+            "element => element.dispatchEvent(new Event('change', { bubbles:"
+            " true }))"
+        )
 
-          market_query = ""
-          if session["market_types"] and session["market_types"][0]:
-            selected_m = session["market_types"][0]
-            market_query = selected_m.replace("Player ", "")
+        # Manage the Mainlines Only Checkbox
+        mainline_checkbox = page.get_by_role("checkbox", name="Mainlines Only")
+        if session["mainlines"] == "y":
+          if not await mainline_checkbox.is_checked():
+            await mainline_checkbox.check()
+        else:
+          if await mainline_checkbox.is_checked():
+            await mainline_checkbox.uncheck()
 
-          if market_query:
+        # Type market type into CNO's "Market Name Contains" input box
+        market_query = ""
+        if session["market_types"] and session["market_types"][0]:
+          selected_m = session["market_types"][0]
+          market_query = selected_m.replace("Player ", "")
+
+        if market_query:
+          try:
             market_input = page.locator("input").filter(
                 has=page.locator(
                     "xpath=//ancestor::tr[contains(., 'Market Name"
@@ -588,43 +480,38 @@ if run_button:
                   "element => element.dispatchEvent(new Event('change', {"
                   " bubbles: true }))"
               )
+          except Exception:
+            pass
 
-          await page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
-          ).click()
-          await page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
-          ).fill("-99")
-          await page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterDevigMethod_DropDownListDevigMethod"
-          ).select_option("8")
-          await page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
-          ).click()
-          await page.locator(
-              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
-          ).fill("5")
+        await page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
+        ).click()
+        await page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
+        ).fill("-99")
+        await page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterDevigMethod_DropDownListDevigMethod"
+        ).select_option("8")
+        await page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
+        ).click()
+        await page.locator(
+            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
+        ).fill("5")
 
-          # Click update and wait for table data to refresh (reduced timeout here as well)
-          await page.get_by_role("button", name="Update").click()
-          
-          await page.wait_for_selector("table tbody tr", timeout=10000)
-          await page.wait_for_function(
-              "() => document.querySelectorAll('table tbody tr').length > 0",
-              timeout=5000,
-          )
+        await page.get_by_role("button", name="Update").click()
+
+        try:
+          await page.wait_for_selector("table tbody tr", timeout=5000)
         except Exception:
-          # If the page loads but has no table data, we pass silently to read zero rows
           pass
 
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(2.5)
 
         results = page.locator("table tbody tr")
         total_rows = await results.count()
 
-        session_debug_rows = []
-        today_plays = []
-
+        app_plays = []
         for i in range(total_rows):
           row_element = results.nth(i)
           raw_text = await row_element.inner_text()
@@ -633,17 +520,12 @@ if run_button:
           ])
           lower_text = clean_line.lower()
 
-          if i < 5:
-            session_debug_rows.append(clean_line)
-            
-          # --- STRICTLY TODAY CHECK ---
-          if not is_today_game(clean_line):
-              continue
-
           if (
               target_league != "ALL"
               and target_league.lower() not in lower_text
           ):
+            continue
+          if not is_today_game(clean_line):
             continue
           if any(
               ex_team in lower_text for ex_team in session["excluded_teams"]
@@ -729,52 +611,27 @@ if run_button:
               "is_k": is_pitcher_strikeouts(clean_line),
               "raw": clean_line,
           }
-
-          today_plays.append(play_obj)
-
+          app_plays.append(play_obj)
           if game_id != "Unknown Game":
             all_scraped_games[game_id] = True
 
-        app_plays = today_plays
         scraped_data_per_session.append(app_plays)
-        debug_raw_rows_info.append({
-            "book": session["book_name"],
-            "total_rows": total_rows,
-            "valid_plays": len(app_plays),
-            "sample_rows": session_debug_rows,
-        })
         await page.close()
 
       await browser.close()
-      return scraped_data_per_session, all_scraped_games, debug_raw_rows_info
+      return scraped_data_per_session, all_scraped_games
 
-  try:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    (
-        scraped_data_per_session,
-        all_scraped_games,
-        debug_raw_rows_info,
-    ) = loop.run_until_complete(run_playwright_scraper())
-    loop.close()
-  except Exception as scraper_err:
-    progress_placeholder.empty()
-    st.error(f"❌ Core Application Error: {scraper_err}")
-    st.stop()
+  loop = asyncio.new_event_loop()
+  asyncio.set_event_loop(loop)
+  scraped_data_per_session, all_scraped_games = loop.run_until_complete(
+      run_playwright_scraper()
+  )
+  loop.close()
 
   progress_placeholder.empty()
-  st.success(f"Scraping attempt complete! ({APP_VERSION})")
+  st.success("Scraping and processing completed successfully!")
 
-  with st.expander("🛠️ Scraper Diagnostic Debug Info", expanded=True):
-    st.write(f"**Version executed:** {APP_VERSION}")
-    for dbg in debug_raw_rows_info:
-      st.markdown(
-          f"**Book:** `{dbg['book']}` | **Rows Found:** `{dbg['total_rows']}` |"
-          f" **Valid 'Today' Plays:** `{dbg['valid_plays']}`"
-      )
-      if dbg["sample_rows"]:
-        st.code("\n".join(dbg["sample_rows"]), language="text")
-
+  # --- RENDER RESULTS ---
   all_global_parlays = []
   for s_idx, session in enumerate(saved_sessions):
     app_plays = scraped_data_per_session[s_idx]
@@ -816,36 +673,18 @@ if run_button:
         boosted_american = combined_american
         boosted_ev = combined_ev
 
-      if session["min_odds"] == 0 and session["max_odds"] == 0:
-        in_range = True
-        distance_from_range = 0.0
-      else:
-        min_val = (
-            session["min_odds"]
-            if session["min_odds"] != 0
-            else -99999
-        )
-        max_val = (
-            session["max_odds"]
-            if session["max_odds"] != 0
-            else 99999
-        )
-        min_dec_target = (
-            american_to_decimal(min_val) if session["min_odds"] != 0 else 1.0
-        )
-        max_dec_target = (
-            american_to_decimal(max_val) if session["max_odds"] != 0 else 99999.0
-        )
-        in_range = min_dec_target <= combined_dec <= max_dec_target
-        distance_from_range = (
-            (min_dec_target - combined_dec)
-            if combined_dec < min_dec_target
-            else (
-                (combined_dec - max_dec_target)
-                if combined_dec > max_dec_target
-                else 0.0
-            )
-        )
+      min_dec_target = american_to_decimal(session["min_odds"])
+      max_dec_target = american_to_decimal(session["max_odds"])
+      in_range = min_dec_target <= combined_dec <= max_dec_target
+      distance_from_range = (
+          (min_dec_target - combined_dec)
+          if combined_dec < min_dec_target
+          else (
+              (combined_dec - max_dec_target)
+              if combined_dec > max_dec_target
+              else 0.0
+          )
+      )
 
       all_global_parlays.append({
           "session_idx": s_idx,
@@ -904,17 +743,15 @@ if run_button:
   total_mass_ev = 0.0
   total_mass_expected_profit = 0.0
   all_bet_details = []
-  has_any_picks = False
 
   for s_idx, session in enumerate(saved_sessions):
     picks = final_picks_by_session[s_idx]
     if not picks:
       continue
-    has_any_picks = True
 
     st.subheader(
-        f"Results for Parlay Box #{s_idx+1}:"
-        f" {session['book_name'].upper()} ({session['target_league']})"
+        f"Results for {session['book_name'].upper()}"
+        f" ({session['target_league']})"
     )
     for p_idx, parlay in enumerate(picks, 1):
       t_parlay_str = (
@@ -949,7 +786,7 @@ if run_button:
 
       html_card = f"""
             <div class="{box_class}">
-                <div class="{header_class}">Parlay Box #{s_idx+1} | Odds: +{parlay['total_american']}{boost_str} (Fair: {t_parlay_str})</div>
+                <div class="{header_class}">Parlay #{p_idx} | Odds: +{parlay['total_american']}{boost_str} (Fair: {t_parlay_str})</div>
                 <div style="margin-bottom: 8px; color: #4CAF50;">
                     <strong>Standard EV:</strong> {parlay['standard_ev']:.2f}% &nbsp;|&nbsp; 
                     <strong>Boosted EV:</strong> {parlay['boosted_ev']:.2f}%
@@ -969,14 +806,7 @@ if run_button:
       html_card += "</div>"
       st.markdown(html_card, unsafe_allow_html=True)
 
-  # Explicit warning if no bets for today were found
-  if not has_any_picks:
-    st.warning(
-        "⚠️ No valid bets for today were found on the page. "
-        "(Games might be finished for the day, or no props meet the current filters). "
-        "Expand the 'Scraper Diagnostic Debug Info' above to see exactly what the scraper saw."
-    )
-
+  # Mass Bet Portfolio Summary
   if len(all_bet_details) > 0:
     total_stakes = sum(b["stake"] for b in all_bet_details)
     num_bets = len(all_bet_details)
@@ -1019,3 +849,34 @@ if run_button:
 </div>
 """
     st.markdown(summary_html, unsafe_allow_html=True)
+
+  # MLB Game Slate & Betting Status Tracking
+  if target_league_input.upper() == "MLB" and all_scraped_games:
+    st.markdown("### 🏟️ MLB Game Slate & Betting Status")
+    bet_games_map = {}
+    for s_idx, picks in final_picks_by_session.items():
+      for parlay in picks:
+        for leg in parlay["legs"]:
+          bet_games_map[leg["game"]] = {
+              "is_prop": leg["is_prop"],
+              "market": leg["raw"],
+          }
+
+    for g_id in sorted(all_scraped_games.keys()):
+      matched_bet = None
+      is_prop_bet = False
+      for bg, binfo in bet_games_map.items():
+        if are_same_game(bg, g_id):
+          matched_bet = bg
+          is_prop_bet = binfo["is_prop"]
+          break
+
+      if matched_bet:
+        prop_note = (
+            " (Note: Bet placed was a Player Prop)"
+            if is_prop_bet
+            else " (Bet placed: Mainline/Team market)"
+        )
+        st.markdown(f"- ✅ **{g_id}**: Bet placed{prop_note}")
+      else:
+        st.markdown(f"- ⏳ **{g_id}**: Yet to be bet on")
