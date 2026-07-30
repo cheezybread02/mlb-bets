@@ -307,7 +307,7 @@ else:
       "Player Pitching Strikeouts",
   ]
 
-# Minimized blank space using side-by-side columns for team filters
+# Minimized blank space using side-by-side columns for team filters in sidebar
 st.sidebar.subheader("Team Filters")
 col_f1, col_f2 = st.sidebar.columns(2)
 with col_f1:
@@ -365,7 +365,6 @@ for idx, cfg in enumerate(st.session_state.parlay_configs):
   with st.sidebar.expander(
       f"Parlay Box #{idx+1} ({cfg['book']})", expanded=True
   ):
-    # Compact layout side-by-side to minimize blank space
     col_b1, col_b2 = st.columns(2)
     with col_b1:
       book = st.selectbox(
@@ -935,32 +934,45 @@ if run_button:
 """
     st.markdown(summary_html, unsafe_allow_html=True)
 
-  if target_league_input.upper() == "MLB" and all_scraped_games:
-    st.markdown("### 🏟️ MLB Game Slate & Betting Status")
-    bet_games_map = {}
+  if all_scraped_games:
+    st.markdown(
+        "### 🏟️ Game Slate Coverage Status (Unbet & Prop-Only Games)"
+    )
+
+    game_bets_map = {}
     for s_idx, picks in final_picks_by_session.items():
       for parlay in picks:
         for leg in parlay["legs"]:
-          bet_games_map[leg["game"]] = {
-              "is_prop": leg["is_prop"],
-              "market": leg["raw"],
-          }
+          g_key = leg["game"]
+          matched_existing = next(
+              (k for k in game_bets_map if are_same_game(k, g_key)), None
+          )
+          target_key = matched_existing if matched_existing else g_key
+          if target_key not in game_bets_map:
+            game_bets_map[target_key] = []
+          game_bets_map[target_key].append(leg)
 
+    unbet_or_prop_only = []
     for g_id in sorted(all_scraped_games.keys()):
-      matched_bet = None
-      is_prop_bet = False
-      for bg, binfo in bet_games_map.items():
-        if are_same_game(bg, g_id):
-          matched_bet = bg
-          is_prop_bet = binfo["is_prop"]
-          break
+      matched_key = next(
+          (k for k in game_bets_map if are_same_game(k, g_id)), None
+      )
+      bets = game_bets_map[matched_key] if matched_key else []
 
-      if matched_bet:
-        prop_note = (
-            " (Note: Bet placed was a Player Prop)"
-            if is_prop_bet
-            else " (Bet placed: Mainline/Team market)"
-        )
-        st.markdown(f"- ✅ **{g_id}**: Bet placed{prop_note}")
+      if not bets:
+        unbet_or_prop_only.append((g_id, "⏳ Not bet on yet"))
       else:
-        st.markdown(f"- ⏳ **{g_id}**: Yet to be bet on")
+        has_mainline = any(not leg["is_prop"] for leg in bets)
+        if not has_mainline:
+          unbet_or_prop_only.append(
+              (g_id, "⚠️ Bet on (Player Prop only, no Mainline)")
+          )
+
+    if unbet_or_prop_only:
+      for g_id, status in unbet_or_prop_only:
+        st.markdown(f"- **{g_id}**: {status}")
+    else:
+      st.markdown(
+          "🎉 All games on the slate are covered with at least one"
+          " mainline/team bet!"
+      )
