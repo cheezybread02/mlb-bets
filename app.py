@@ -7,7 +7,7 @@ import streamlit as st
 from playwright.async_api import async_playwright
 
 # --- VERSION TRACKING ---
-APP_VERSION = "v2.5.1 - Build: 2026-07-29-3"
+APP_VERSION = "v2.5.2 - Build: 2026-07-29-4"
 
 # --- PLAYWRIGHT AUTO-INSTALL HOOK FOR STREAMLIT CLOUD ---
 @st.cache_resource
@@ -486,9 +486,18 @@ if run_button:
 
   async def run_playwright_scraper():
     async with async_playwright() as p:
-      browser = await p.chromium.launch(headless=True)
+      browser = await p.chromium.launch(
+          headless=True,
+          args=[
+              "--disable-blink-features=AutomationControlled",
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage",
+          ],
+      )
       context = await browser.new_context(
-          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          viewport={"width": 1920, "height": 1080},
       )
 
       scraped_data_per_session = []
@@ -499,11 +508,18 @@ if run_button:
         page = await context.new_page()
         target_league = session["target_league"]
 
-        await page.goto(
-            "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
-            timeout=60000,
-            wait_until="domcontentloaded",
-        )
+        try:
+          await page.goto(
+              "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
+              timeout=60000,
+              wait_until="commit",
+          )
+        except Exception as nav_err:
+          await page.close()
+          await browser.close()
+          raise RuntimeError(
+              f"Failed to navigate to Crazyninjaodds (Timeout/Block): {nav_err}"
+          )
 
         # Select sportsbook and trigger change event
         sb_dropdown = page.locator(
@@ -582,7 +598,6 @@ if run_button:
 
         try:
           await page.wait_for_selector("table tbody tr", timeout=15000)
-          # Ensure table rows are loaded and present
           await page.wait_for_function(
               "() => document.querySelectorAll('table tbody tr').length > 0",
               timeout=10000,
@@ -607,7 +622,7 @@ if run_button:
           ])
           lower_text = clean_line.lower()
 
-          if i < 5:  # Keep track of first few raw rows for debugging preview
+          if i < 5:
             session_debug_rows.append(clean_line)
 
           if (
@@ -722,14 +737,19 @@ if run_button:
       await browser.close()
       return scraped_data_per_session, all_scraped_games, debug_raw_rows_info
 
-  loop = asyncio.new_event_loop()
-  asyncio.set_event_loop(loop)
-  (
-      scraped_data_per_session,
-      all_scraped_games,
-      debug_raw_rows_info,
-  ) = loop.run_until_complete(run_playwright_scraper())
-  loop.close()
+  try:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    (
+        scraped_data_per_session,
+        all_scraped_games,
+        debug_raw_rows_info,
+    ) = loop.run_until_complete(run_playwright_scraper())
+    loop.close()
+  except Exception as scraper_err:
+    progress_placeholder.empty()
+    st.error(f"❌ Scraper Error: {scraper_err}")
+    st.stop()
 
   progress_placeholder.empty()
   st.success(f"Scraping completed successfully! ({APP_VERSION})")
