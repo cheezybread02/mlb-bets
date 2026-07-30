@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import itertools
 import os
 import re
@@ -133,43 +133,74 @@ def is_today_game(raw_text):
   if "tomorrow" in lower:
     return False
 
-  future_date_patterns = [
-      "7/29",
-      "07/29",
-      "7/30",
-      "07/30",
-      "7/31",
-      "07/31",
-      "jul 29",
-      "jul 30",
-      "jul 31",
-      "july 29",
-      "july 30",
-      "july 31",
-      "aug",
-      "8/",
+  now = datetime.now()
+  tomorrow = now + timedelta(days=1)
+
+  # Check if tomorrow's date is explicitly mentioned -> exclude from today
+  f_month, f_day = tomorrow.month, tomorrow.day
+  future_patterns = [
+      f"{f_month}/{f_day}",
+      f"{f_month:02d}/{f_day:02d}",
+      tomorrow.strftime("%b %d").lower(),
+      tomorrow.strftime("%B %d").lower(),
+      tomorrow.strftime("%d %b").lower(),
+      tomorrow.strftime("%d %B").lower(),
+      f"{f_month}-{f_day}",
+      f"{f_month:02d}-{f_day:02d}",
   ]
-  for f_pattern in future_date_patterns:
+  for f_pattern in future_patterns:
     if f_pattern in lower:
       return False
 
   if "today" in lower:
     return True
 
-  current_date_patterns = [
-      "7/28",
-      "07/28",
-      "7-28",
-      "07-28",
-      "jul 28",
-      "july 28",
-      "28 jul",
-      "28 july",
+  # Check today's date dynamically
+  c_month, c_day = now.month, now.day
+  current_patterns = [
+      f"{c_month}/{c_day}",
+      f"{c_month:02d}/{c_day:02d}",
+      f"{c_month}-{c_day}",
+      f"{c_month:02d}-{c_day:02d}",
+      now.strftime("%b %d").lower(),
+      now.strftime("%B %d").lower(),
+      now.strftime("%d %b").lower(),
+      now.strftime("%d %B").lower(),
   ]
-  for pattern in current_date_patterns:
+  for pattern in current_patterns:
     if pattern in lower:
       return True
+
   return True
+
+
+def is_tomorrow_game(raw_text):
+  lower = raw_text.lower()
+  if "today" in lower:
+    return False
+
+  now = datetime.now()
+  tomorrow = now + timedelta(days=1)
+
+  if "tomorrow" in lower:
+    return True
+
+  f_month, f_day = tomorrow.month, tomorrow.day
+  future_patterns = [
+      f"{f_month}/{f_day}",
+      f"{f_month:02d}/{f_day:02d}",
+      tomorrow.strftime("%b %d").lower(),
+      tomorrow.strftime("%B %d").lower(),
+      tomorrow.strftime("%d %b").lower(),
+      tomorrow.strftime("%d %B").lower(),
+      f"{f_month}-{f_day}",
+      f"{f_month:02d}-{f_day:02d}",
+  ]
+  for pattern in future_patterns:
+    if pattern in lower:
+      return True
+
+  return False
 
 
 def are_same_game(g1, g2):
@@ -307,7 +338,6 @@ else:
       "Player Pitching Strikeouts",
   ]
 
-# Minimized blank space using side-by-side columns for team filters in sidebar
 st.sidebar.subheader("Team Filters")
 col_f1, col_f2 = st.sidebar.columns(2)
 with col_f1:
@@ -499,7 +529,11 @@ if run_button:
         page = await context.new_page()
         target_league = session["target_league"]
 
-        await page.goto("https://crazyninjaodds.com/site/tools/positive-ev.aspx")
+        await page.goto(
+            "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
+            timeout=60000,
+            wait_until="domcontentloaded",
+        )
 
         await page.locator(
             "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterSportsbookSite_DropDownListSportsbookSite_All"
@@ -578,7 +612,9 @@ if run_button:
         results = page.locator("table tbody tr")
         total_rows = await results.count()
 
-        app_plays = []
+        today_plays = []
+        tomorrow_plays = []
+
         for i in range(total_rows):
           row_element = results.nth(i)
           raw_text = await row_element.inner_text()
@@ -591,8 +627,6 @@ if run_button:
               target_league != "ALL"
               and target_league.lower() not in lower_text
           ):
-            continue
-          if not is_today_game(clean_line):
             continue
           if any(
               ex_team in lower_text for ex_team in session["excluded_teams"]
@@ -613,6 +647,12 @@ if run_button:
 
           odds_match = re.findall(r"([+-]\d{3,4})", clean_line)
           if not odds_match:
+            continue
+
+          is_today = is_today_game(clean_line)
+          is_tom = is_tomorrow_game(clean_line)
+
+          if not is_today and not is_tom:
             continue
 
           american_odds = int(odds_match[0])
@@ -678,9 +718,17 @@ if run_button:
               "is_k": is_pitcher_strikeouts(clean_line),
               "raw": clean_line,
           }
-          app_plays.append(play_obj)
+
+          if is_today:
+            today_plays.append(play_obj)
+          elif is_tom:
+            tomorrow_plays.append(play_obj)
+
           if game_id != "Unknown Game":
             all_scraped_games[game_id] = True
+
+        # Fallback: if no bets for today, look at tomorrow's bets as well
+        app_plays = today_plays if today_plays else tomorrow_plays
 
         scraped_data_per_session.append(app_plays)
         await page.close()
@@ -739,7 +787,6 @@ if run_button:
         boosted_american = combined_american
         boosted_ev = combined_ev
 
-      # If min/max odds are 0, bypass strict range filtering or allow all
       if session["min_odds"] == 0 and session["max_odds"] == 0:
         in_range = True
         distance_from_range = 0.0
