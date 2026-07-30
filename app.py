@@ -491,7 +491,7 @@ if run_button:
   async def run_playwright_scraper():
     async with Stealth().use_async(async_playwright()) as p:
       browser = await p.chromium.launch(
-          headless=False,
+          headless=True,
           args=[
               "--disable-blink-features=AutomationControlled",
               "--no-sandbox",
