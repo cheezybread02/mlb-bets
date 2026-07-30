@@ -6,6 +6,9 @@ import re
 import streamlit as st
 from playwright.async_api import async_playwright
 
+# --- VERSION TRACKING (Updates every time code changes) ---
+APP_VERSION = "v2.5.0 - Build: 2026-07-29-2"
+
 # --- PLAYWRIGHT AUTO-INSTALL HOOK FOR STREAMLIT CLOUD ---
 @st.cache_resource
 def install_playwright_browsers():
@@ -161,7 +164,6 @@ def is_today_game(raw_text):
     if pattern in lower:
       return True
 
-  # Default fallback to allow unlabelled games if no explicit future date is found
   return True
 
 
@@ -231,6 +233,8 @@ def is_pitcher_strikeouts(raw_text):
 
 # --- STREAMLIT UI SIDEBAR CONFIGURATION ---
 st.sidebar.header("⚙️ Configuration")
+st.sidebar.markdown(f"**App Version:** `{APP_VERSION}`")
+st.sidebar.markdown("---")
 
 target_league_input = st.sidebar.selectbox(
     "Target League", list(league_mapping.keys()), index=3, key="cfg_league"
@@ -443,6 +447,7 @@ run_button = st.sidebar.button(
 )
 
 st.title("⚾ Multi-Bet Parlay Scraper")
+st.caption(f"Active Version: `{APP_VERSION}`")
 
 if run_button:
   if not st.session_state.parlay_configs:
@@ -474,7 +479,9 @@ if run_button:
     })
 
   progress_placeholder = st.empty()
-  progress_placeholder.info("Launching Playwright scraper... Please wait.")
+  progress_placeholder.info(
+      f"Launching Playwright scraper ({APP_VERSION})... Please wait."
+  )
 
 
   async def run_playwright_scraper():
@@ -486,6 +493,7 @@ if run_button:
 
       scraped_data_per_session = []
       all_scraped_games = {}
+      debug_raw_rows_info = []
 
       for session in saved_sessions:
         page = await context.new_page()
@@ -564,16 +572,18 @@ if run_button:
 
         await page.get_by_role("button", name="Update").click()
 
-        # Robust wait for table refresh after ASP.NET postback
         try:
-          await page.wait_for_selector("table tbody tr", timeout=10000)
+          await page.wait_for_selector("table tbody tr", timeout=12000)
         except Exception:
           pass
 
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(3.5)
 
         results = page.locator("table tbody tr")
         total_rows = await results.count()
+        debug_raw_rows_info.append(
+            f"Book {session['book_name']}: {total_rows} rows found."
+        )
 
         today_plays = []
         all_valid_plays = []
@@ -685,24 +695,31 @@ if run_button:
           if game_id != "Unknown Game":
             all_scraped_games[game_id] = True
 
-        # Fallback: if no specific today plays filter match, use all valid scraped plays (covering next days/upcoming slate)
         app_plays = today_plays if today_plays else all_valid_plays
-
         scraped_data_per_session.append(app_plays)
         await page.close()
 
       await browser.close()
-      return scraped_data_per_session, all_scraped_games
+      return scraped_data_per_session, all_scraped_games, debug_raw_rows_info
 
   loop = asyncio.new_event_loop()
   asyncio.set_event_loop(loop)
-  scraped_data_per_session, all_scraped_games = loop.run_until_complete(
-      run_playwright_scraper()
-  )
+  (
+      scraped_data_per_session,
+      all_scraped_games,
+      debug_raw_rows_info,
+  ) = loop.run_until_complete(run_playwright_scraper())
   loop.close()
 
   progress_placeholder.empty()
-  st.success("Scraping and processing completed successfully!")
+  st.success(f"Scraping completed successfully! ({APP_VERSION})")
+
+  with st.expander("🛠️ Scraper Diagnostic Debug Info", expanded=False):
+    st.write(f"**Version executed:** {APP_VERSION}")
+    for dbg in debug_raw_rows_info:
+      st.write(dbg)
+    for idx, plays in enumerate(scraped_data_per_session):
+      st.write(f"Session #{idx+1} valid plays parsed: {len(plays)}")
 
   all_global_parlays = []
   for s_idx, session in enumerate(saved_sessions):
@@ -834,10 +851,12 @@ if run_button:
   total_mass_expected_profit = 0.0
   all_bet_details = []
 
+  has_any_picks = False
   for s_idx, session in enumerate(saved_sessions):
     picks = final_picks_by_session[s_idx]
     if not picks:
       continue
+    has_any_picks = True
 
     st.subheader(
         f"Results for Parlay Box #{s_idx+1}:"
@@ -896,6 +915,13 @@ if run_button:
       html_card += "</div>"
       st.markdown(html_card, unsafe_allow_html=True)
 
+  if not has_any_picks:
+    st.warning(
+        "⚠️ No qualifying parlays found with current settings/filters."
+        " Check the 'Scraper Diagnostic Debug Info' above to see if rows"
+        " were found on the site."
+    )
+
   if len(all_bet_details) > 0:
     total_stakes = sum(b["stake"] for b in all_bet_details)
     num_bets = len(all_bet_details)
@@ -938,46 +964,3 @@ if run_button:
 </div>
 """
     st.markdown(summary_html, unsafe_allow_html=True)
-
-  if all_scraped_games:
-    st.markdown(
-        "### 🏟️ Game Slate Coverage Status (Unbet & Prop-Only Games)"
-    )
-
-    game_bets_map = {}
-    for s_idx, picks in final_picks_by_session.items():
-      for parlay in picks:
-        for leg in parlay["legs"]:
-          g_key = leg["game"]
-          matched_existing = next(
-              (k for k in game_bets_map if are_same_game(k, g_key)), None
-          )
-          target_key = matched_existing if matched_existing else g_key
-          if target_key not in game_bets_map:
-            game_bets_map[target_key] = []
-          game_bets_map[target_key].append(leg)
-
-    unbet_or_prop_only = []
-    for g_id in sorted(all_scraped_games.keys()):
-      matched_key = next(
-          (k for k in game_bets_map if are_same_game(k, g_id)), None
-      )
-      bets = game_bets_map[matched_key] if matched_key else []
-
-      if not bets:
-        unbet_or_prop_only.append((g_id, "⏳ Not bet on yet"))
-      else:
-        has_mainline = any(not leg["is_prop"] for leg in bets)
-        if not has_mainline:
-          unbet_or_prop_only.append(
-              (g_id, "⚠️ Bet on (Player Prop only, no Mainline)")
-          )
-
-    if unbet_or_prop_only:
-      for g_id, status in unbet_or_prop_only:
-        st.markdown(f"- **{g_id}**: {status}")
-    else:
-      st.markdown(
-          "🎉 All games on the slate are covered with at least one"
-          " mainline/team bet!"
-      )
