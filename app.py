@@ -3,12 +3,12 @@ from datetime import datetime, timedelta
 import itertools
 import os
 import re
-import streamlit as st
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
+import streamlit as st
 
 # --- VERSION TRACKING ---
-APP_VERSION = "v2.5.3 - Build: 2026-07-29-5"
+APP_VERSION = "v2.5.4 - Build: 2026-07-29-6"
 
 
 # --- DEPENDENCY & BROWSER AUTO-INSTALL HOOK ---
@@ -488,7 +488,8 @@ if run_button:
 
 
   async def run_playwright_scraper():
-    async with async_playwright() as p:
+    # Use modern Playwright-Stealth v2 context manager to bypass Cloudflare/bot detections
+    async with Stealth().use_async(async_playwright()) as p:
       browser = await p.chromium.launch(
           headless=True,
           args=[
@@ -512,9 +513,6 @@ if run_button:
 
       for session in saved_sessions:
         page = await context.new_page()
-        # Apply stealth patches to bypass Cloudflare/bot detections
-        await stealth_async(page)
-
         target_league = session["target_league"]
 
         try:
