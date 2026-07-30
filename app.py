@@ -5,17 +5,20 @@ import os
 import re
 import streamlit as st
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 # --- VERSION TRACKING ---
-APP_VERSION = "v2.5.2 - Build: 2026-07-29-4"
+APP_VERSION = "v2.5.3 - Build: 2026-07-29-5"
 
-# --- PLAYWRIGHT AUTO-INSTALL HOOK FOR STREAMLIT CLOUD ---
+
+# --- DEPENDENCY & BROWSER AUTO-INSTALL HOOK ---
 @st.cache_resource
-def install_playwright_browsers():
+def install_dependencies():
+  os.system("pip install playwright-stealth")
   os.system("playwright install")
 
 
-install_playwright_browsers()
+install_dependencies()
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Multi-Bet Parlay Scraper", layout="wide")
@@ -480,7 +483,7 @@ if run_button:
 
   progress_placeholder = st.empty()
   progress_placeholder.info(
-      f"Launching Playwright scraper ({APP_VERSION})... Please wait."
+      f"Launching Stealth Playwright scraper ({APP_VERSION})... Please wait."
   )
 
 
@@ -496,7 +499,10 @@ if run_button:
           ],
       )
       context = await browser.new_context(
-          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          user_agent=(
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+              " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+          ),
           viewport={"width": 1920, "height": 1080},
       )
 
@@ -506,13 +512,16 @@ if run_button:
 
       for session in saved_sessions:
         page = await context.new_page()
+        # Apply stealth patches to bypass Cloudflare/bot detections
+        await stealth_async(page)
+
         target_league = session["target_league"]
 
         try:
           await page.goto(
               "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
               timeout=60000,
-              wait_until="commit",
+              wait_until="domcontentloaded",
           )
         except Exception as nav_err:
           await page.close()
