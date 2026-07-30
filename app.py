@@ -8,7 +8,8 @@ from playwright_stealth import Stealth
 import streamlit as st
 
 # --- VERSION TRACKING ---
-APP_VERSION = "v2.6.0 - Build: Strict Today Only"
+# Dynamically generate the current date and time as the version
+APP_VERSION = datetime.now().strftime("%Y-%m-%d %I:%M %p")
 
 
 # --- DEPENDENCY & BROWSER AUTO-INSTALL HOOK ---
@@ -514,16 +515,16 @@ if run_button:
         page = await context.new_page()
         target_league = session["target_league"]
         
-        # Soft-fail block for navigation issues
+        # Fast-fail block for navigation issues with reduced timeout (10 seconds)
         try:
           await page.goto(
               "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
-              timeout=60000,
-              wait_until="commit", # Using commit to stop hanging on tracker pixels
+              timeout=10000, 
+              wait_until="commit",
           )
           await asyncio.sleep(2.0)
         except Exception as nav_err:
-          # If the site times out or hangs, we log it and treat it as an empty table rather than crashing
+          # Log timeout silently and treat as empty table
           debug_raw_rows_info.append({
               "book": session["book_name"],
               "total_rows": 0,
@@ -604,14 +605,13 @@ if run_button:
               "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
           ).fill("5")
 
-          # Click update and wait for table data to refresh completely
+          # Click update and wait for table data to refresh (reduced timeout here as well)
           await page.get_by_role("button", name="Update").click()
           
-          # Wait softly for table to load
-          await page.wait_for_selector("table tbody tr", timeout=15000)
+          await page.wait_for_selector("table tbody tr", timeout=10000)
           await page.wait_for_function(
               "() => document.querySelectorAll('table tbody tr').length > 0",
-              timeout=10000,
+              timeout=5000,
           )
         except Exception:
           # If the page loads but has no table data, we pass silently to read zero rows
@@ -774,8 +774,6 @@ if run_button:
       )
       if dbg["sample_rows"]:
         st.code("\n".join(dbg["sample_rows"]), language="text")
-      else:
-        st.warning("No rows captured or table was empty.")
 
   all_global_parlays = []
   for s_idx, session in enumerate(saved_sessions):
