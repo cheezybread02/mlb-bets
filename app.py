@@ -8,7 +8,7 @@ from playwright_stealth import Stealth
 import streamlit as st
 
 # --- VERSION TRACKING ---
-APP_VERSION = "v2.5.4 - Build: 2026-07-29-6"
+APP_VERSION = "v2.6.0 - Build: Strict Today Only"
 
 
 # --- DEPENDENCY & BROWSER AUTO-INSTALL HOOK ---
@@ -488,7 +488,6 @@ if run_button:
 
 
   async def run_playwright_scraper():
-    # Use modern Playwright-Stealth v2 context manager to bypass Cloudflare/bot detections
     async with Stealth().use_async(async_playwright()) as p:
       browser = await p.chromium.launch(
           headless=True,
@@ -514,56 +513,63 @@ if run_button:
       for session in saved_sessions:
         page = await context.new_page()
         target_league = session["target_league"]
-
+        
+        # Soft-fail block for navigation issues
         try:
           await page.goto(
               "https://crazyninjaodds.com/site/tools/positive-ev.aspx",
               timeout=60000,
-              wait_until="domcontentloaded",
+              wait_until="commit", # Using commit to stop hanging on tracker pixels
           )
+          await asyncio.sleep(2.0)
         except Exception as nav_err:
+          # If the site times out or hangs, we log it and treat it as an empty table rather than crashing
+          debug_raw_rows_info.append({
+              "book": session["book_name"],
+              "total_rows": 0,
+              "valid_plays": 0,
+              "sample_rows": [f"Navigation Error / Timeout: {nav_err}"],
+          })
+          scraped_data_per_session.append([])
           await page.close()
-          await browser.close()
-          raise RuntimeError(
-              f"Failed to navigate to Crazyninjaodds (Timeout/Block): {nav_err}"
-          )
+          continue 
 
         # Select sportsbook and trigger change event
-        sb_dropdown = page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterSportsbookSite_DropDownListSportsbookSite_All"
-        )
-        await sb_dropdown.select_option(session["book_val"])
-        await sb_dropdown.evaluate(
-            "element => element.dispatchEvent(new Event('change', { bubbles:"
-            " true }))"
-        )
+        try:
+          sb_dropdown = page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterSportsbookSite_DropDownListSportsbookSite_All"
+          )
+          await sb_dropdown.select_option(session["book_val"])
+          await sb_dropdown.evaluate(
+              "element => element.dispatchEvent(new Event('change', { bubbles:"
+              " true }))"
+          )
 
-        # Select league and trigger change event
-        league_val = league_mapping.get(target_league.upper(), "0")
-        league_locator = page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterLeague_DropDownListLeague"
-        )
-        await league_locator.select_option(league_val)
-        await league_locator.evaluate(
-            "element => element.dispatchEvent(new Event('change', { bubbles:"
-            " true }))"
-        )
+          # Select league and trigger change event
+          league_val = league_mapping.get(target_league.upper(), "0")
+          league_locator = page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterLeague_DropDownListLeague"
+          )
+          await league_locator.select_option(league_val)
+          await league_locator.evaluate(
+              "element => element.dispatchEvent(new Event('change', { bubbles:"
+              " true }))"
+          )
 
-        mainline_checkbox = page.get_by_role("checkbox", name="Mainlines Only")
-        if session["mainlines"] == "y":
-          if not await mainline_checkbox.is_checked():
-            await mainline_checkbox.check()
-        else:
-          if await mainline_checkbox.is_checked():
-            await mainline_checkbox.uncheck()
+          mainline_checkbox = page.get_by_role("checkbox", name="Mainlines Only")
+          if session["mainlines"] == "y":
+            if not await mainline_checkbox.is_checked():
+              await mainline_checkbox.check()
+          else:
+            if await mainline_checkbox.is_checked():
+              await mainline_checkbox.uncheck()
 
-        market_query = ""
-        if session["market_types"] and session["market_types"][0]:
-          selected_m = session["market_types"][0]
-          market_query = selected_m.replace("Player ", "")
+          market_query = ""
+          if session["market_types"] and session["market_types"][0]:
+            selected_m = session["market_types"][0]
+            market_query = selected_m.replace("Player ", "")
 
-        if market_query:
-          try:
+          if market_query:
             market_input = page.locator("input").filter(
                 has=page.locator(
                     "xpath=//ancestor::tr[contains(., 'Market Name"
@@ -581,35 +587,34 @@ if run_button:
                   "element => element.dispatchEvent(new Event('change', {"
                   " bubbles: true }))"
               )
-          except Exception:
-            pass
 
-        await page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
-        ).click()
-        await page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
-        ).fill("-99")
-        await page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterDevigMethod_DropDownListDevigMethod"
-        ).select_option("8")
-        await page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
-        ).click()
-        await page.locator(
-            "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
-        ).fill("5")
+          await page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
+          ).click()
+          await page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_TextBoxMinimumEVPercentage"
+          ).fill("-99")
+          await page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterDevigMethod_DropDownListDevigMethod"
+          ).select_option("8")
+          await page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
+          ).click()
+          await page.locator(
+              "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
+          ).fill("5")
 
-        # Click update and wait for table data to refresh completely
-        await page.get_by_role("button", name="Update").click()
-
-        try:
+          # Click update and wait for table data to refresh completely
+          await page.get_by_role("button", name="Update").click()
+          
+          # Wait softly for table to load
           await page.wait_for_selector("table tbody tr", timeout=15000)
           await page.wait_for_function(
               "() => document.querySelectorAll('table tbody tr').length > 0",
               timeout=10000,
           )
         except Exception:
+          # If the page loads but has no table data, we pass silently to read zero rows
           pass
 
         await asyncio.sleep(2.0)
@@ -619,7 +624,6 @@ if run_button:
 
         session_debug_rows = []
         today_plays = []
-        all_valid_plays = []
 
         for i in range(total_rows):
           row_element = results.nth(i)
@@ -631,6 +635,10 @@ if run_button:
 
           if i < 5:
             session_debug_rows.append(clean_line)
+            
+          # --- STRICTLY TODAY CHECK ---
+          if not is_today_game(clean_line):
+              continue
 
           if (
               target_league != "ALL"
@@ -657,8 +665,6 @@ if run_button:
           odds_match = re.findall(r"([+-]\d{3,4})", clean_line)
           if not odds_match:
             continue
-
-          is_today = is_today_game(clean_line)
 
           american_odds = int(odds_match[0])
           decimal_odds = american_to_decimal(american_odds)
@@ -724,14 +730,12 @@ if run_button:
               "raw": clean_line,
           }
 
-          all_valid_plays.append(play_obj)
-          if is_today:
-            today_plays.append(play_obj)
+          today_plays.append(play_obj)
 
           if game_id != "Unknown Game":
             all_scraped_games[game_id] = True
 
-        app_plays = today_plays if today_plays else all_valid_plays
+        app_plays = today_plays
         scraped_data_per_session.append(app_plays)
         debug_raw_rows_info.append({
             "book": session["book_name"],
@@ -755,18 +759,18 @@ if run_button:
     loop.close()
   except Exception as scraper_err:
     progress_placeholder.empty()
-    st.error(f"❌ Scraper Error: {scraper_err}")
+    st.error(f"❌ Core Application Error: {scraper_err}")
     st.stop()
 
   progress_placeholder.empty()
-  st.success(f"Scraping completed successfully! ({APP_VERSION})")
+  st.success(f"Scraping attempt complete! ({APP_VERSION})")
 
   with st.expander("🛠️ Scraper Diagnostic Debug Info", expanded=True):
     st.write(f"**Version executed:** {APP_VERSION}")
     for dbg in debug_raw_rows_info:
       st.markdown(
           f"**Book:** `{dbg['book']}` | **Rows Found:** `{dbg['total_rows']}` |"
-          f" **Valid Parsed Plays:** `{dbg['valid_plays']}`"
+          f" **Valid 'Today' Plays:** `{dbg['valid_plays']}`"
       )
       if dbg["sample_rows"]:
         st.code("\n".join(dbg["sample_rows"]), language="text")
@@ -902,8 +906,8 @@ if run_button:
   total_mass_ev = 0.0
   total_mass_expected_profit = 0.0
   all_bet_details = []
-
   has_any_picks = False
+
   for s_idx, session in enumerate(saved_sessions):
     picks = final_picks_by_session[s_idx]
     if not picks:
@@ -967,11 +971,12 @@ if run_button:
       html_card += "</div>"
       st.markdown(html_card, unsafe_allow_html=True)
 
+  # Explicit warning if no bets for today were found
   if not has_any_picks:
     st.warning(
-        "⚠️ No qualifying parlays found with current settings/filters."
-        " Expand the 'Scraper Diagnostic Debug Info' above to inspect what text"
-        " was pulled from the page."
+        "⚠️ No valid bets for today were found on the page. "
+        "(Games might be finished for the day, or no props meet the current filters). "
+        "Expand the 'Scraper Diagnostic Debug Info' above to see exactly what the scraper saw."
     )
 
   if len(all_bet_details) > 0:
