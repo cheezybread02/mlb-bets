@@ -6,8 +6,8 @@ import re
 import streamlit as st
 from playwright.async_api import async_playwright
 
-# --- VERSION TRACKING (Updates every time code changes) ---
-APP_VERSION = "v2.5.0 - Build: 2026-07-29-2"
+# --- VERSION TRACKING ---
+APP_VERSION = "v2.5.1 - Build: 2026-07-29-3"
 
 # --- PLAYWRIGHT AUTO-INSTALL HOOK FOR STREAMLIT CLOUD ---
 @st.cache_resource
@@ -505,10 +505,17 @@ if run_button:
             wait_until="domcontentloaded",
         )
 
-        await page.locator(
+        # Select sportsbook and trigger change event
+        sb_dropdown = page.locator(
             "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterSportsbookSite_DropDownListSportsbookSite_All"
-        ).select_option(session["book_val"])
+        )
+        await sb_dropdown.select_option(session["book_val"])
+        await sb_dropdown.evaluate(
+            "element => element.dispatchEvent(new Event('change', { bubbles:"
+            " true }))"
+        )
 
+        # Select league and trigger change event
         league_val = league_mapping.get(target_league.upper(), "0")
         league_locator = page.locator(
             "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterLeague_DropDownListLeague"
@@ -570,21 +577,25 @@ if run_button:
             "#ContentPlaceHolderMain_ContentPlaceHolderRight_WebUserControl_FilterOddsProviderCount_TextBoxMinimumOddsProviderCount"
         ).fill("5")
 
+        # Click update and wait for table data to refresh completely
         await page.get_by_role("button", name="Update").click()
 
         try:
-          await page.wait_for_selector("table tbody tr", timeout=12000)
+          await page.wait_for_selector("table tbody tr", timeout=15000)
+          # Ensure table rows are loaded and present
+          await page.wait_for_function(
+              "() => document.querySelectorAll('table tbody tr').length > 0",
+              timeout=10000,
+          )
         except Exception:
           pass
 
-        await asyncio.sleep(3.5)
+        await asyncio.sleep(2.0)
 
         results = page.locator("table tbody tr")
         total_rows = await results.count()
-        debug_raw_rows_info.append(
-            f"Book {session['book_name']}: {total_rows} rows found."
-        )
 
+        session_debug_rows = []
         today_plays = []
         all_valid_plays = []
 
@@ -595,6 +606,9 @@ if run_button:
               line.strip() for line in raw_text.splitlines() if line.strip()
           ])
           lower_text = clean_line.lower()
+
+          if i < 5:  # Keep track of first few raw rows for debugging preview
+            session_debug_rows.append(clean_line)
 
           if (
               target_league != "ALL"
@@ -697,6 +711,12 @@ if run_button:
 
         app_plays = today_plays if today_plays else all_valid_plays
         scraped_data_per_session.append(app_plays)
+        debug_raw_rows_info.append({
+            "book": session["book_name"],
+            "total_rows": total_rows,
+            "valid_plays": len(app_plays),
+            "sample_rows": session_debug_rows,
+        })
         await page.close()
 
       await browser.close()
@@ -714,12 +734,17 @@ if run_button:
   progress_placeholder.empty()
   st.success(f"Scraping completed successfully! ({APP_VERSION})")
 
-  with st.expander("🛠️ Scraper Diagnostic Debug Info", expanded=False):
+  with st.expander("🛠️ Scraper Diagnostic Debug Info", expanded=True):
     st.write(f"**Version executed:** {APP_VERSION}")
     for dbg in debug_raw_rows_info:
-      st.write(dbg)
-    for idx, plays in enumerate(scraped_data_per_session):
-      st.write(f"Session #{idx+1} valid plays parsed: {len(plays)}")
+      st.markdown(
+          f"**Book:** `{dbg['book']}` | **Rows Found:** `{dbg['total_rows']}` |"
+          f" **Valid Parsed Plays:** `{dbg['valid_plays']}`"
+      )
+      if dbg["sample_rows"]:
+        st.code("\n".join(dbg["sample_rows"]), language="text")
+      else:
+        st.warning("No rows captured or table was empty.")
 
   all_global_parlays = []
   for s_idx, session in enumerate(saved_sessions):
@@ -918,8 +943,8 @@ if run_button:
   if not has_any_picks:
     st.warning(
         "⚠️ No qualifying parlays found with current settings/filters."
-        " Check the 'Scraper Diagnostic Debug Info' above to see if rows"
-        " were found on the site."
+        " Expand the 'Scraper Diagnostic Debug Info' above to inspect what text"
+        " was pulled from the page."
     )
 
   if len(all_bet_details) > 0:
