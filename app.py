@@ -136,17 +136,12 @@ def is_today_game(raw_text):
   now = datetime.now()
   tomorrow = now + timedelta(days=1)
 
-  # Check if tomorrow's date is explicitly mentioned -> exclude from today
   f_month, f_day = tomorrow.month, tomorrow.day
   future_patterns = [
       f"{f_month}/{f_day}",
       f"{f_month:02d}/{f_day:02d}",
       tomorrow.strftime("%b %d").lower(),
       tomorrow.strftime("%B %d").lower(),
-      tomorrow.strftime("%d %b").lower(),
-      tomorrow.strftime("%d %B").lower(),
-      f"{f_month}-{f_day}",
-      f"{f_month:02d}-{f_day:02d}",
   ]
   for f_pattern in future_patterns:
     if f_pattern in lower:
@@ -155,52 +150,19 @@ def is_today_game(raw_text):
   if "today" in lower:
     return True
 
-  # Check today's date dynamically
   c_month, c_day = now.month, now.day
   current_patterns = [
       f"{c_month}/{c_day}",
       f"{c_month:02d}/{c_day:02d}",
-      f"{c_month}-{c_day}",
-      f"{c_month:02d}-{c_day:02d}",
       now.strftime("%b %d").lower(),
       now.strftime("%B %d").lower(),
-      now.strftime("%d %b").lower(),
-      now.strftime("%d %B").lower(),
   ]
   for pattern in current_patterns:
     if pattern in lower:
       return True
 
+  # Default fallback to allow unlabelled games if no explicit future date is found
   return True
-
-
-def is_tomorrow_game(raw_text):
-  lower = raw_text.lower()
-  if "today" in lower:
-    return False
-
-  now = datetime.now()
-  tomorrow = now + timedelta(days=1)
-
-  if "tomorrow" in lower:
-    return True
-
-  f_month, f_day = tomorrow.month, tomorrow.day
-  future_patterns = [
-      f"{f_month}/{f_day}",
-      f"{f_month:02d}/{f_day:02d}",
-      tomorrow.strftime("%b %d").lower(),
-      tomorrow.strftime("%B %d").lower(),
-      tomorrow.strftime("%d %b").lower(),
-      tomorrow.strftime("%d %B").lower(),
-      f"{f_month}-{f_day}",
-      f"{f_month:02d}-{f_day:02d}",
-  ]
-  for pattern in future_patterns:
-    if pattern in lower:
-      return True
-
-  return False
 
 
 def are_same_game(g1, g2):
@@ -602,18 +564,19 @@ if run_button:
 
         await page.get_by_role("button", name="Update").click()
 
+        # Robust wait for table refresh after ASP.NET postback
         try:
-          await page.wait_for_selector("table tbody tr", timeout=5000)
+          await page.wait_for_selector("table tbody tr", timeout=10000)
         except Exception:
           pass
 
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(3.0)
 
         results = page.locator("table tbody tr")
         total_rows = await results.count()
 
         today_plays = []
-        tomorrow_plays = []
+        all_valid_plays = []
 
         for i in range(total_rows):
           row_element = results.nth(i)
@@ -650,10 +613,6 @@ if run_button:
             continue
 
           is_today = is_today_game(clean_line)
-          is_tom = is_tomorrow_game(clean_line)
-
-          if not is_today and not is_tom:
-            continue
 
           american_odds = int(odds_match[0])
           decimal_odds = american_to_decimal(american_odds)
@@ -719,16 +678,15 @@ if run_button:
               "raw": clean_line,
           }
 
+          all_valid_plays.append(play_obj)
           if is_today:
             today_plays.append(play_obj)
-          elif is_tom:
-            tomorrow_plays.append(play_obj)
 
           if game_id != "Unknown Game":
             all_scraped_games[game_id] = True
 
-        # Fallback: if no bets for today, look at tomorrow's bets as well
-        app_plays = today_plays if today_plays else tomorrow_plays
+        # Fallback: if no specific today plays filter match, use all valid scraped plays (covering next days/upcoming slate)
+        app_plays = today_plays if today_plays else all_valid_plays
 
         scraped_data_per_session.append(app_plays)
         await page.close()
